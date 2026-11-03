@@ -10,6 +10,7 @@ mkdir -p "$OUT" "$TMP"
 
 FONT=/usr/share/fonts/opentype/inter/Inter-Bold.otf
 FONT_SUB=/usr/share/fonts/opentype/inter/Inter-Medium.otf
+FONT_PILL=/usr/share/fonts/opentype/inter/Inter-SemiBold.otf
 W=1920; H=1080; FPS=30
 XF=0.3
 GREEN='0x4F8A6B'
@@ -17,35 +18,53 @@ VERSION=${VERSION:-draft_v1}
 
 ENC=(-c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p -r $FPS -an)
 
-overlay_text() {
-  local txtfile=$1 style=$2 delay=${3:-0.25}
-  if [[ $style == light ]]; then
-    echo "drawtext=fontfile=$FONT:textfile=$txtfile:fontsize=64:fontcolor=white:shadowcolor=black@0.55:shadowx=0:shadowy=3:x=(w-tw)/2:y=h*0.80-th/2:alpha='min(1,max(0,(t-$delay)/0.35))'"
-  else
-    echo "drawtext=fontfile=$FONT:textfile=$txtfile:fontsize=64:fontcolor=$GREEN:x=(w-tw)/2:y=h*0.86-th/2:alpha='min(1,max(0,(t-$delay)/0.35))'"
-  fi
+# Cream rounded pill with green text and a soft shadow, as a transparent PNG.
+make_pill() {
+  local text=$1 out=$2 size=${3:-54}
+  local tw th
+  read -r tw th <<<"$(convert -font "$FONT_PILL" -pointsize "$size" label:"$text" -format "%w %h" info:)"
+  local px=$((size*3/4)) py=$((size*3/10)) m=$((size*6/10))
+  local pw=$((tw+2*px)) ph=$((th+2*py))
+  local cw=$((pw+2*m)) chh=$((ph+2*m)) r=$((ph/2))
+  convert -size ${cw}x${chh} xc:none \
+    \( -size ${cw}x${chh} xc:none -fill "rgba(0,0,0,0.30)" -draw "roundrectangle $m,$((m+6)),$((m+pw)),$((m+ph+6)),$r,$r" -blur 0x$((size/4)) \) -composite \
+    -fill "rgba(251,247,240,0.91)" -draw "roundrectangle $m,$m,$((m+pw)),$((m+ph)),$r,$r" \
+    -font "$FONT_PILL" -pointsize "$size" -fill "#4F8A6B" -gravity center -annotate +0+0 "$text" "$out"
 }
 
+# Overlays an animated pill on a rendered segment: eased slide-up + fade in, fade out before the cut.
+add_pill() {
+  local name=$1 dur=$2 text=$3 delay=$4 px=$5 py=$6 size=${7:-54}
+  make_pill "$text" "$TMP/$name.png" "$size"
+  local out_st; out_st=$(awk "BEGIN{print $dur-$XF-0.35}")
+  ffmpeg -v error -y -i "$TMP/$name.bare.mp4" -framerate $FPS -loop 1 -t "$dur" -i "$TMP/$name.png" -filter_complex "
+    [1:v]format=rgba,fade=t=in:st=$delay:d=0.4:alpha=1,fade=t=out:st=$out_st:d=0.3:alpha=1[p];
+    [0:v][p]overlay=x=W*$px-w/2:y='H*$py-h/2+26*pow(1-min(1,max(0,(t-$delay)/0.5)),2)':shortest=1" \
+    "${ENC[@]}" "$TMP/$name.mp4"
+}
+
+# clip <name> <src_start> <dur> <text> <grade> <text_delay> <pill_x> <pill_y> [pill_size]
 clip() {
-  local name=$1 start=$2 dur=$3 text=$4 grade=${5:-null} delay=${6:-0.25}
+  local name=$1 start=$2 dur=$3 text=$4 grade=${5:-null} delay=${6:-0.25} px=${7:-0.5} py=${8:-0.86} size=${9:-54}
   local vf="trim=start=$start:duration=$dur,setpts=PTS-STARTPTS,scale=$W:$H:flags=lanczos,fps=$FPS,$grade"
-  if [[ -n $text ]]; then
-    printf '%s' "$text" > "$TMP/$name.txt"
-    vf="$vf,$(overlay_text "$TMP/$name.txt" light "$delay")"
+  if [[ -z $text ]]; then
+    ffmpeg -v error -y -i "$A/$name.mp4" -vf "$vf" "${ENC[@]}" "$TMP/$name.mp4"
+    return
   fi
-  ffmpeg -v error -y -i "$A/$name.mp4" -vf "$vf" "${ENC[@]}" "$TMP/$name.mp4"
+  ffmpeg -v error -y -i "$A/$name.mp4" -vf "$vf" "${ENC[@]}" "$TMP/$name.bare.mp4"
+  add_pill "$name" "$dur" "$text" "$delay" "$px" "$py" "$size"
 }
 
 photo() {
-  local name=$1 crop=$2 boxw=$3 boxh=$4 dur=$5 text=$6 x=${7:-(W-w)/2} y=${8:-(H-h)/2-40}
+  local name=$1 crop=$2 boxw=$3 boxh=$4 dur=$5 text=$6
   local frames; frames=$(awk "BEGIN{print int($dur*$FPS)}")
-  printf '%s' "$text" > "$TMP/$name.txt"
   ffmpeg -v error -y -loop 1 -i "$A/product_box.webp" -filter_complex "
     color=white:s=${W}x${H}:d=1[bg];
     [0:v]crop=$crop,scale=$boxw:$boxh:force_original_aspect_ratio=decrease:flags=lanczos[p];
-    [bg][p]overlay=x='$x':y='$y',format=yuv420p,
-    scale=$((W*2)):$((H*2)),zoompan=z='1+0.08*on/$frames':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=$frames:s=${W}x${H}:fps=$FPS,
-    $(overlay_text "$TMP/$name.txt" dark)" -frames:v "$frames" "${ENC[@]}" "$TMP/$name.mp4"
+    [bg][p]overlay=x=(W-w)/2:y=(H-h)/2-40,format=yuv420p,
+    scale=$((W*2)):$((H*2)),zoompan=z='1+0.08*on/$frames':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=$frames:s=${W}x${H}:fps=$FPS" \
+    -frames:v "$frames" "${ENC[@]}" "$TMP/$name.bare.mp4"
+  add_pill "$name" "$dur" "$text" 0.25 0.5 0.88
 }
 
 endcard() {
@@ -53,13 +72,16 @@ endcard() {
   printf '%s' "bblüv" > "$TMP/end1.txt"
   printf '%s' "Rinö Pro" > "$TMP/end2.txt"
   printf '%s' "Battery-operated nasal aspirator · 0m+" > "$TMP/end3.txt"
+  rise() { echo "$1+24*pow(1-min(1\,max(0\,(t-$2)/0.5))\,2)"; }
+  fadein() { echo "min(1\,max(0\,(t-$1)/0.45))"; }
   ffmpeg -v error -y -loop 1 -i "$A/product_box.webp" -filter_complex "
     color=white:s=${W}x${H}:d=$dur:r=$FPS[bg];
     [0:v]scale=-1:1000:flags=lanczos[p];
     [bg][p]overlay=x=W-w-60:y=(H-h)/2,format=yuv420p,
-    drawtext=fontfile=$FONT:textfile=$TMP/end1.txt:fontsize=120:fontcolor=$GREEN:x=120:y=330,
-    drawtext=fontfile=$FONT:textfile=$TMP/end2.txt:fontsize=96:fontcolor=0x333333:x=120:y=480,
-    drawtext=fontfile=$FONT_SUB:textfile=$TMP/end3.txt:fontsize=38:fontcolor=0x555555:x=124:y=620" -t "$dur" -frames:v "$frames" "${ENC[@]}" "$TMP/endcard.mp4"
+    drawtext=fontfile=$FONT:textfile=$TMP/end1.txt:fontsize=120:fontcolor=$GREEN:x=120:y=$(rise 330 0.15):alpha=$(fadein 0.15),
+    drawtext=fontfile=$FONT:textfile=$TMP/end2.txt:fontsize=96:fontcolor=0x333333:x=120:y=$(rise 480 0.4):alpha=$(fadein 0.4),
+    drawtext=fontfile=$FONT_SUB:textfile=$TMP/end3.txt:fontsize=38:fontcolor=0x555555:x=124:y=$(rise 620 0.65):alpha=$(fadein 0.65)" \
+    -t "$dur" -frames:v "$frames" "${ENC[@]}" "$TMP/endcard.mp4"
 }
 
 # Visual start time of each shot (seconds); VO lines start 0.2s after their shot.
@@ -69,14 +91,19 @@ dur_of() { awk "BEGIN{n=${S[$(($1+1))]:-$TOTAL_TARGET}; x=($1<7)?$XF:0; print n-
 SEGS=()
 add() { SEGS+=("$1|$2"); }
 
-d=$(dur_of 0); clip 01_nightstand 0.3 "$d" "bblüv Rinö Pro";                                        add 01_nightstand "$d"
-d=$(dur_of 1); clip 02_mother 1.1 "$d" "For stuffy little noses at bedtime" "eq=brightness=0.04:gamma=1.18"; add 02_mother "$d"
-d=$(dur_of 2); clip 03_display 0.0 "$d" "5 adjustable suction levels" null 2.1;                      add 03_display "$d"
-d=$(dur_of 3); clip 04_glow 1.0 "$d" "Soothing melody & light";                                      add 04_glow "$d"
-d=$(dur_of 4); photo tips "1254:560:0:694" 1700 720 "$d" "4 interchangeable tips · from birth (0m+)"; add tips "$d"
-d=$(dur_of 5); photo product "300:1030:820:115" 1000 760 "$d" "USB-C rechargeable";                   add product "$d"
-d=$(dur_of 6); clip 05_baby 0.4 "$d" "" "eq=brightness=0.01";                                        add 05_baby "$d"
-d=$(dur_of 7); endcard "$d";                                                                         add endcard "$d"
+d=$(dur_of 0); clip 01_nightstand 0.3 "$d" "bblüv Rinö Pro" null 0.2 0.5 0.86 62;                         add 01_nightstand "$d"
+d=$(dur_of 1); clip 02_mother 1.1 "$d" "For stuffy little noses at bedtime" "eq=brightness=0.04:gamma=1.18" 0.25 0.5 0.86; add 02_mother "$d"
+d=$(dur_of 2); clip 03_display 0.0 "$d" "5 adjustable suction levels" null 2.1 0.72 0.18;                 add 03_display "$d"
+d=$(dur_of 3); clip 04_glow 1.0 "$d" "Soothing melody & light" null 0.25 0.27 0.78;                       add 04_glow "$d"
+d=$(dur_of 4)
+if [[ -f $A/06_tips.mp4 ]]; then
+  clip 06_tips 0.8 "$d" "4 interchangeable tips · from birth (0m+)" null 0.25 "${TIPS_X:-0.5}" "${TIPS_Y:-0.88}"; add 06_tips "$d"
+else
+  photo tips "1254:560:0:694" 1700 720 "$d" "4 interchangeable tips · from birth (0m+)";              add tips "$d"
+fi
+d=$(dur_of 5); clip 07_usbc 1.0 "$d" "USB-C rechargeable" null 0.25 0.5 0.91;                            add 07_usbc "$d"
+d=$(dur_of 6); clip 05_baby 0.4 "$d" "" "eq=brightness=0.01";                                           add 05_baby "$d"
+d=$(dur_of 7); endcard "$d";                                                                            add endcard "$d"
 
 # Chain crossfades
 inputs=(); filter=""; prev="0:v"; offset=0
