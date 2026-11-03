@@ -108,7 +108,7 @@ if [[ -f $VO ]]; then
   done
   af+="${mix}amix=inputs=${#LINES[@]}:normalize=0,apad,atrim=0:$TOTAL[vo];"
   if [[ -n $MUSIC ]]; then
-    af+="[1:a]aresample=48000,volume=0.18,atrim=0:$TOTAL,afade=t=out:st=$(awk "BEGIN{print $TOTAL-1.5}"):d=1.5[m];[vo][m]amix=inputs=2:normalize=0[mx];[mx]"
+    af+="[1:a]aresample=48000,volume=0.18,atrim=0:$TOTAL,afade=t=in:d=0.6,afade=t=out:st=$(awk "BEGIN{print $TOTAL-1.5}"):d=1.5[m];[vo][m]amix=inputs=2:normalize=0[mx];[mx]"
     in2=(-i "$MUSIC")
   else
     af+="[vo]"; in2=()
