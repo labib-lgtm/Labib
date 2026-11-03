@@ -97,7 +97,7 @@ d=$(dur_of 2); clip 03_display 0.0 "$d" "5 adjustable suction levels" null 2.1 0
 d=$(dur_of 3); clip 04_glow 1.0 "$d" "Soothing melody & light" null 0.25 0.27 0.78;                       add 04_glow "$d"
 d=$(dur_of 4)
 if [[ -f $A/06_tips.mp4 ]]; then
-  clip 06_tips 0.8 "$d" "4 interchangeable tips · from birth (0m+)" null 0.25 "${TIPS_X:-0.5}" "${TIPS_Y:-0.88}"; add 06_tips "$d"
+  clip 06_tips 0.8 "$d" "4 interchangeable tips · from birth (0m+)" null 0.25 "${TIPS_X:-0.62}" "${TIPS_Y:-0.13}"; add 06_tips "$d"
 else
   photo tips "1254:560:0:694" 1700 720 "$d" "4 interchangeable tips · from birth (0m+)";              add tips "$d"
 fi
